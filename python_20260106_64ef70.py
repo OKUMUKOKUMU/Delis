@@ -6,10 +6,18 @@ import numpy as np
 import re
 import io
 import warnings
-from openpyxl import load_workbook
 import base64
 from datetime import datetime
 import time
+import sys
+
+# Try to import openpyxl, show instructions if not installed
+try:
+    from openpyxl import load_workbook
+    OPENPYXL_AVAILABLE = True
+except ImportError:
+    OPENPYXL_AVAILABLE = False
+    st.error("⚠️ **openpyxl is not installed!** Please install it using: `pip install openpyxl`")
 
 warnings.filterwarnings('ignore')
 
@@ -57,6 +65,13 @@ st.markdown("""
         border-left: 4px solid #F59E0B;
         margin: 1rem 0;
     }
+    .error-box {
+        background-color: #FEE2E2;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        border-left: 4px solid #EF4444;
+        margin: 1rem 0;
+    }
     .metric-card {
         background-color: #F8FAFC;
         padding: 1rem;
@@ -67,14 +82,75 @@ st.markdown("""
     .stProgress > div > div > div > div {
         background-color: #3B82F6;
     }
-    .file-uploader {
-        border: 2px dashed #3B82F6;
+    .install-instructions {
+        background-color: #F3F4F6;
+        padding: 1.5rem;
         border-radius: 0.5rem;
-        padding: 2rem;
-        text-align: center;
+        border: 2px dashed #6B7280;
+        margin: 1rem 0;
+        font-family: monospace;
     }
 </style>
 """, unsafe_allow_html=True)
+
+def check_dependencies():
+    """Check if all required packages are installed"""
+    missing_packages = []
+    
+    try:
+        import openpyxl
+    except ImportError:
+        missing_packages.append("openpyxl")
+    
+    try:
+        import pandas
+    except ImportError:
+        missing_packages.append("pandas")
+    
+    try:
+        import numpy
+    except ImportError:
+        missing_packages.append("numpy")
+    
+    return missing_packages
+
+# Check dependencies first
+if not OPENPYXL_AVAILABLE:
+    st.markdown('<div class="error-box">', unsafe_allow_html=True)
+    st.markdown("### ⚠️ Missing Dependencies")
+    st.markdown("""
+    The following required packages are not installed:
+    
+    **Required packages:**
+    - `openpyxl` (for reading Excel files)
+    - `pandas` (for data manipulation)
+    - `numpy` (for numerical operations)
+    
+    **Installation instructions:**
+    """)
+    
+    st.markdown('<div class="install-instructions">', unsafe_allow_html=True)
+    st.code("pip install openpyxl pandas numpy", language="bash")
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+    st.markdown("""
+    **For Streamlit Cloud deployment**, create a `requirements.txt` file with:
+    """)
+    
+    st.markdown('<div class="install-instructions">', unsafe_allow_html=True)
+    st.code("""openpyxl==3.1.2
+pandas==2.1.0
+numpy==1.24.0
+streamlit==1.28.0""", language="txt")
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+    st.markdown("""
+    **After installing**, refresh this page or restart the app.
+    """)
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Stop execution if dependencies are missing
+    st.stop()
 
 # Initialize session state
 if 'extracted_data' not in st.session_state:
