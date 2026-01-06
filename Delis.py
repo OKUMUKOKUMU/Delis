@@ -1,4 +1,4 @@
-# app.py - Streamlit Invoice Extraction App
+# app.py - Streamlit Invoice Extraction App (Optimized Version)
 
 import streamlit as st
 import pandas as pd
@@ -9,6 +9,7 @@ import warnings
 import base64
 from datetime import datetime
 import time
+import gc
 import sys
 
 # Try to import openpyxl, show instructions if not installed
@@ -90,66 +91,27 @@ st.markdown("""
         margin: 1rem 0;
         font-family: monospace;
     }
+    .sheet-info {
+        background-color: #F8FAFC;
+        padding: 0.5rem;
+        border-radius: 0.25rem;
+        margin: 0.25rem 0;
+        font-size: 0.9rem;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-def check_dependencies():
-    """Check if all required packages are installed"""
-    missing_packages = []
-    
-    try:
-        import openpyxl
-    except ImportError:
-        missing_packages.append("openpyxl")
-    
-    try:
-        import pandas
-    except ImportError:
-        missing_packages.append("pandas")
-    
-    try:
-        import numpy
-    except ImportError:
-        missing_packages.append("numpy")
-    
-    return missing_packages
-
-# Check dependencies first
+# Check if openpyxl is available
 if not OPENPYXL_AVAILABLE:
-    st.markdown('<div class="error-box">', unsafe_allow_html=True)
-    st.markdown("### ⚠️ Missing Dependencies")
     st.markdown("""
-    The following required packages are not installed:
-    
-    **Required packages:**
-    - `openpyxl` (for reading Excel files)
-    - `pandas` (for data manipulation)
-    - `numpy` (for numerical operations)
-    
-    **Installation instructions:**
-    """)
-    
-    st.markdown('<div class="install-instructions">', unsafe_allow_html=True)
-    st.code("pip install openpyxl pandas numpy", language="bash")
-    st.markdown('</div>', unsafe_allow_html=True)
-    
-    st.markdown("""
-    **For Streamlit Cloud deployment**, create a `requirements.txt` file with:
-    """)
-    
-    st.markdown('<div class="install-instructions">', unsafe_allow_html=True)
-    st.code("""openpyxl==3.1.2
-pandas==2.1.0
-numpy==1.24.0
-streamlit==1.28.0""", language="txt")
-    st.markdown('</div>', unsafe_allow_html=True)
-    
-    st.markdown("""
-    **After installing**, refresh this page or restart the app.
-    """)
-    st.markdown('</div>', unsafe_allow_html=True)
-    
-    # Stop execution if dependencies are missing
+    <div class="error-box">
+    <h3>⚠️ Missing Dependencies</h3>
+    <p>Please install the required packages:</p>
+    <div class="install-instructions">
+    pip install openpyxl pandas numpy streamlit
+    </div>
+    </div>
+    """, unsafe_allow_html=True)
     st.stop()
 
 # Initialize session state
@@ -159,119 +121,41 @@ if 'processing_complete' not in st.session_state:
     st.session_state.processing_complete = False
 if 'selected_sheets_count' not in st.session_state:
     st.session_state.selected_sheets_count = 0
+if 'current_progress' not in st.session_state:
+    st.session_state.current_progress = 0
 
-def read_excel_with_merged_cells(file_content, sheet_name):
-    """Read Excel file and handle merged cells properly"""
-    wb = load_workbook(io.BytesIO(file_content), data_only=True)
-    ws = wb[sheet_name]
-    
-    # Get merged cell ranges
-    merged_ranges = ws.merged_cells.ranges
-    
-    # Create a dictionary to map merged cells
-    merged_cells_map = {}
-    for merged_range in merged_ranges:
-        min_col, min_row, max_col, max_row = merged_range.bounds
-        # Get the value from the top-left cell
-        top_left_value = ws.cell(row=min_row, column=min_col).value
-        
-        # Map all cells in this range to the top-left value
-        for row in range(min_row, max_row + 1):
-            for col in range(min_col, max_col + 1):
-                merged_cells_map[(row, col)] = top_left_value
-    
-    # Read all data into a list of lists
-    data = []
-    max_row = ws.max_row
-    max_col = ws.max_column
-    
-    for row in range(1, max_row + 1):
-        row_data = []
-        for col in range(1, max_col + 1):
-            # Check if cell is in merged range
-            if (row, col) in merged_cells_map:
-                cell_value = merged_cells_map[(row, col)]
-            else:
-                cell_value = ws.cell(row=row, column=col).value
-            
-            row_data.append(cell_value)
-        data.append(row_data)
-    
-    # Convert to DataFrame
-    df = pd.DataFrame(data)
-    
-    return df
-
-def clean_numeric_value(value):
-    """Clean a numeric value by removing non-numeric characters"""
-    if pd.isna(value):
-        return value
-    
-    str_value = str(value)
-    # Remove currency symbols, commas, spaces
-    str_value = re.sub(r'[^\d\.\-]', '', str_value)
-    return str_value
-
-def clean_and_convert_item_data(items_df):
-    """Clean and convert item data to proper types"""
-    # Clean UoM column
-    if 'UoM' in items_df.columns:
-        items_df['UoM'] = items_df['UoM'].apply(
-            lambda x: str(x).strip().title() if pd.notna(x) and str(x).strip() else 'Kilograms'
+# Optimized functions
+def read_excel_sheet_fast(file_content, sheet_name):
+    """Optimized function to read Excel sheet with memory management"""
+    try:
+        # Use pandas to read the sheet directly (faster for large files)
+        df = pd.read_excel(
+            io.BytesIO(file_content),
+            sheet_name=sheet_name,
+            header=None,
+            engine='openpyxl'
         )
-    
-    # Convert numeric columns
-    numeric_columns = ['Qty', 'Unit Price Excl. VAT', 'VAT %', 'Line Amount Excl. VAT']
-    
-    for col in numeric_columns:
-        if col in items_df.columns:
-            # Clean the values
-            items_df[col] = items_df[col].apply(
-                lambda x: clean_numeric_value(x) if pd.notna(x) else None
-            )
-            # Convert to numeric
-            items_df[col] = pd.to_numeric(items_df[col], errors='coerce')
-    
-    # Calculate missing line amounts
-    if 'Line Amount Excl. VAT' in items_df.columns and 'Qty' in items_df.columns and 'Unit Price Excl. VAT' in items_df.columns:
-        mask = (items_df['Line Amount Excl. VAT'].isna() | (items_df['Line Amount Excl. VAT'] == 0)) & items_df['Qty'].notna() & items_df['Unit Price Excl. VAT'].notna()
-        items_df.loc[mask, 'Line Amount Excl. VAT'] = items_df.loc[mask, 'Qty'] * items_df.loc[mask, 'Unit Price Excl. VAT']
-    
-    # Set default VAT % if missing
-    if 'VAT %' in items_df.columns:
-        items_df['VAT %'] = items_df['VAT %'].fillna(16.0)
-    
-    # Remove empty rows
-    items_df = items_df[items_df['No.'].astype(str).str.strip() != '']
-    items_df = items_df[items_df['Description'].astype(str).str.strip() != '']
-    
-    return items_df
+        return df
+    except Exception as e:
+        # Fallback to openpyxl if pandas fails
+        try:
+            wb = load_workbook(io.BytesIO(file_content), data_only=True, read_only=True)
+            ws = wb[sheet_name]
+            
+            # Get data efficiently
+            data = []
+            for row in ws.iter_rows(values_only=True):
+                data.append(list(row))
+            
+            df = pd.DataFrame(data)
+            wb.close()
+            return df
+        except Exception as e2:
+            st.warning(f"Could not read sheet '{sheet_name}': {str(e2)[:100]}")
+            return pd.DataFrame()
 
-def extract_financial_totals(df, row_idx, header_positions, result):
-    """Extract financial totals from a totals row"""
-    for col_name, col_idx in header_positions.items():
-        if col_idx < len(df.columns):
-            cell_value = df.iloc[row_idx, col_idx]
-            if pd.notna(cell_value):
-                try:
-                    # Clean and convert to number
-                    num_str = str(cell_value).replace(',', '').replace(' ', '')
-                    num_val = float(num_str)
-                    
-                    # Determine which total this is based on column
-                    if 'Line Amount' in col_name:
-                        first_cell = str(df.iloc[row_idx, header_positions.get('No.', 0)]).lower()
-                        if 'subtotal' in first_cell:
-                            result['subtotal'] = num_val
-                        elif 'vat amount' in first_cell:
-                            result['vat_amount'] = num_val
-                        elif 'total' in first_cell:
-                            result['total_amount'] = num_val
-                except:
-                    pass
-
-def extract_invoice_data_from_sheet(df, file_name, sheet_name, progress_bar=None, status_text=None):
-    """Extract invoice data from a single sheet"""
+def extract_invoice_data_fast(df, file_name, sheet_name):
+    """Optimized extraction function with early returns"""
     result = {
         'file_name': file_name,
         'sheet_name': sheet_name,
@@ -285,181 +169,127 @@ def extract_invoice_data_from_sheet(df, file_name, sheet_name, progress_bar=None
         'total_amount': 0
     }
     
-    # 1. Extract Customer/Branch Name
-    customer_names = []
-    for idx in range(min(20, len(df))):
-        row_vals = []
-        for col in range(min(15, len(df.columns))):
-            cell_val = df.iloc[idx, col] if col < len(df.columns) else ''
-            if pd.notna(cell_val) and str(cell_val).strip():
-                row_vals.append(str(cell_val).strip())
-        
-        row_str = ' '.join(row_vals)
-        
-        # Look for customer names
-        if any(keyword in row_str for keyword in ['Chandarana', 'Delis', 'Branch', 'Buffalo', 'Naivasha']):
-            name_patterns = [
-                r'(Chandarana[^\d\n]{0,50}Branch)',
-                r'(Chandarana[^\d\n]{0,50}Mall)',
-                r'(Chandarana[^\d\n]{0,50}Naivasha)',
-                r'(Chandarana[^\d\n]{0,30})',
-            ]
-            
-            for pattern in name_patterns:
-                match = re.search(pattern, row_str, re.IGNORECASE)
-                if match:
-                    name = match.group(1).strip()
-                    if name and name not in customer_names and len(name) > 5:
-                        customer_names.append(name)
-                        break
+    # Convert to string for searching (only first 30 rows for speed)
+    df_sample = df.head(30).fillna('').astype(str)
     
-    if customer_names:
-        branch_names = [name for name in customer_names if 'Branch' in name or 'Mall' in name]
-        if branch_names:
-            result['customer_name'] = branch_names[0]
-        else:
-            result['customer_name'] = customer_names[-1]
-    
-    # 2. Extract Document Date
-    for idx in range(len(df)):
-        for col in range(min(10, len(df.columns))):
-            cell_val = str(df.iloc[idx, col])
-            
-            if cell_val.strip() == 'Document Date':
-                # Check columns E, F, G (4, 5, 6 in 0-index)
-                target_columns = [4, 5, 6]
-                
-                for target_col in target_columns:
-                    if target_col < len(df.columns):
-                        date_cell = df.iloc[idx, target_col]
-                        if pd.notna(date_cell):
-                            date_str = str(date_cell).strip()
-                            
-                            date_patterns = [
-                                r'(\d{1,2}\.\s+[A-Za-z]+\s+\d{4})',
-                                r'(\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{2,4})',
-                                r'(\d{4}[/\-\.]\d{1,2}[/\-\.]\d{1,2})',
-                                r'(\d{1,2}-[A-Za-z]{3}-\d{4})',
-                                r'(\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})',
-                            ]
-                            
-                            for pattern in date_patterns:
-                                match = re.search(pattern, date_str)
-                                if match:
-                                    result['document_date'] = match.group(1)
-                                    break
-    
-    # 3. Extract Invoice Number
-    invoice_found = False
-    for idx in range(len(df)):
-        for col in range(min(15, len(df.columns))):
-            cell_val = str(df.iloc[idx, col])
-            
-            if 'Invoice No.' in cell_val and not invoice_found:
-                # Check to the RIGHT
-                for offset in range(1, 6):
-                    check_col = col + offset
-                    if check_col < len(df.columns):
-                        inv_cell = df.iloc[idx, check_col]
-                        if pd.notna(inv_cell):
-                            inv_str = str(inv_cell).strip()
-                            if (inv_str and len(inv_str) > 3 and 
-                                re.match(r'^\d+$', inv_str) and
-                                'Invoice' not in inv_str and 
-                                'No.' not in inv_str and
-                                'CU' not in inv_str):
-                                result['invoice_number'] = inv_str
-                                invoice_found = True
-                                break
-    
-    # 4. Extract Order Number
-    order_found = False
-    for idx in range(len(df)):
-        for col in range(min(15, len(df.columns))):
-            cell_val = str(df.iloc[idx, col])
-            
-            if 'Order No.' in cell_val and not order_found:
-                # Check to the RIGHT
-                for offset in range(1, 6):
-                    check_col = col + offset
-                    if check_col < len(df.columns):
-                        order_cell = df.iloc[idx, check_col]
-                        if pd.notna(order_cell):
-                            order_str = str(order_cell).strip()
-                            if order_str and re.match(r'^\d+$', order_str):
-                                result['order_number'] = order_str
-                                order_found = True
-                                break
-    
-    # 5. Find and extract items table
-    items_data = []
-    header_positions = {}
-    
-    # Look for the header row
-    for idx in range(len(df)):
-        current_header_positions = {}
-        
-        for col in range(min(20, len(df.columns))):
-            cell_val = str(df.iloc[idx, col]).strip().lower() if col < len(df.columns) else ''
-            
-            header_mappings = {
-                'no.': 'No.',
-                'description': 'Description',
-                'qty': 'Qty',
-                'uom': 'UoM',
-                'unit price excl. vat': 'Unit Price Excl. VAT',
-                'unit price': 'Unit Price Excl. VAT',
-                'vat %': 'VAT %',
-                'vat%': 'VAT %',
-                'line amount excl. vat': 'Line Amount Excl. VAT',
-                'line amount': 'Line Amount Excl. VAT'
-            }
-            
-            for keyword, col_name in header_mappings.items():
-                if keyword in cell_val:
-                    current_header_positions[col_name] = col
+    # 1. Extract Customer/Branch Name (optimized)
+    for idx in range(min(10, len(df_sample))):
+        for col in range(min(5, len(df_sample.columns))):
+            cell_val = df_sample.iloc[idx, col]
+            if 'Chandarana' in cell_val or 'Delis' in cell_val:
+                # Try to extract full name
+                name_match = re.search(r'(Chandarana[^\\d\\n]{0,50}(?:Branch|Mall|Naivasha)?)', cell_val, re.IGNORECASE)
+                if name_match:
+                    result['customer_name'] = name_match.group(1).strip()
                     break
-        
-        if len(current_header_positions) >= 4:
-            header_positions = current_header_positions
-            
-            # Extract items from rows below
-            for item_idx in range(idx + 1, len(df)):
-                if 'No.' in header_positions:
-                    no_col = header_positions['No.']
-                    if no_col < len(df.columns):
-                        item_no = df.iloc[item_idx, no_col]
-                        
-                        if pd.isna(item_no):
-                            continue
-                        
-                        item_no_str = str(item_no).strip()
-                        
-                        if (re.match(r'^[A-Z]{2,4}-\d{5}', item_no_str) or 
-                            re.match(r'^\d+[A-Z]?$', item_no_str)):
-                            
-                            item_data = {}
-                            
-                            for col_name, col_idx in header_positions.items():
-                                if col_idx < len(df.columns):
-                                    cell_value = df.iloc[item_idx, col_idx]
-                                    item_data[col_name] = cell_value if pd.notna(cell_value) else ''
-                            
-                            if 'Description' in item_data:
-                                item_data['Description'] = str(item_data['Description']).strip()
-                            
-                            items_data.append(item_data)
-                        
-                        elif any(keyword in item_no_str.lower() for keyword in ['subtotal', 'total', 'vat amount']):
-                            extract_financial_totals(df, item_idx, header_positions, result)
-                            break
-            
+        if result['customer_name']:
             break
     
-    # 6. Create DataFrame from items
+    # 2. Extract Document Date (optimized for columns E,F,G)
+    for idx in range(min(20, len(df))):
+        for col in range(min(5, len(df.columns))):
+            if pd.notna(df.iloc[idx, col]) and str(df.iloc[idx, col]).strip() == 'Document Date':
+                # Check columns E,F,G (indices 4,5,6)
+                for date_col in [4, 5, 6]:
+                    if date_col < len(df.columns) and pd.notna(df.iloc[idx, date_col]):
+                        date_str = str(df.iloc[idx, date_col])
+                        date_match = re.search(r'(\d{1,2}[\.\/\-]\s*[A-Za-z]+\s*\d{4}|\d{1,2}[\.\/\-]\d{1,2}[\.\/\-]\d{2,4})', date_str)
+                        if date_match:
+                            result['document_date'] = date_match.group(1)
+                            break
+                break
+    
+    # 3. Extract Invoice Number
+    for idx in range(min(20, len(df))):
+        for col in range(min(10, len(df.columns))):
+            cell_val = str(df.iloc[idx, col]) if pd.notna(df.iloc[idx, col]) else ''
+            if 'Invoice No.' in cell_val:
+                # Check adjacent cells
+                for offset in [1, 2, -1, -2]:
+                    check_col = col + offset
+                    if 0 <= check_col < len(df.columns) and pd.notna(df.iloc[idx, check_col]):
+                        inv_str = str(df.iloc[idx, check_col]).strip()
+                        if inv_str and re.match(r'^\d+$', inv_str):
+                            result['invoice_number'] = inv_str
+                            break
+                break
+    
+    # 4. Extract Order Number
+    for idx in range(min(20, len(df))):
+        for col in range(min(10, len(df.columns))):
+            cell_val = str(df.iloc[idx, col]) if pd.notna(df.iloc[idx, col]) else ''
+            if 'Order No.' in cell_val:
+                for offset in [1, 2, -1, -2]:
+                    check_col = col + offset
+                    if 0 <= check_col < len(df.columns) and pd.notna(df.iloc[idx, check_col]):
+                        order_str = str(df.iloc[idx, check_col]).strip()
+                        if order_str and re.match(r'^\d+$', order_str):
+                            result['order_number'] = order_str
+                            break
+                break
+    
+    # 5. Find items table (optimized)
+    items_data = []
+    header_found = False
+    
+    # Look for header row pattern
+    for idx in range(len(df)):
+        if header_found:
+            break
+            
+        # Check if this row has item header indicators
+        header_indicators = 0
+        for col in range(min(15, len(df.columns))):
+            if pd.notna(df.iloc[idx, col]):
+                cell_str = str(df.iloc[idx, col]).lower()
+                if any(keyword in cell_str for keyword in ['no.', 'description', 'qty', 'uom', 'unit price', 'vat', 'line amount']):
+                    header_indicators += 1
+        
+        if header_indicators >= 3:  # Found header
+            header_found = True
+            
+            # Extract items from following rows
+            for item_idx in range(idx + 1, min(idx + 100, len(df))):  # Limit to 100 rows after header
+                # Check if first column has item code
+                if pd.notna(df.iloc[item_idx, 0]):
+                    first_cell = str(df.iloc[item_idx, 0]).strip()
+                    
+                    # Check if it's an item code
+                    if re.match(r'^[A-Z]{2,4}-\d{5}', first_cell):
+                        item = {
+                            'No.': first_cell,
+                            'Description': str(df.iloc[item_idx, 1]) if 1 < len(df.columns) and pd.notna(df.iloc[item_idx, 1]) else '',
+                            'Qty': df.iloc[item_idx, 2] if 2 < len(df.columns) and pd.notna(df.iloc[item_idx, 2]) else '',
+                            'UoM': str(df.iloc[item_idx, 3]) if 3 < len(df.columns) and pd.notna(df.iloc[item_idx, 3]) else 'Kilograms'
+                        }
+                        
+                        # Try to extract prices from remaining columns
+                        for price_col in range(4, min(10, len(df.columns))):
+                            if pd.notna(df.iloc[item_idx, price_col]):
+                                cell_val = df.iloc[item_idx, price_col]
+                                try:
+                                    # Try to convert to number
+                                    if isinstance(cell_val, (int, float)):
+                                        if 'Unit Price' not in item:
+                                            item['Unit Price Excl. VAT'] = float(cell_val)
+                                        elif 'VAT %' not in item:
+                                            item['VAT %'] = float(cell_val)
+                                        elif 'Line Amount Excl. VAT' not in item:
+                                            item['Line Amount Excl. VAT'] = float(cell_val)
+                                except:
+                                    pass
+                        
+                        items_data.append(item)
+                    
+                    # Stop if we hit totals
+                    elif any(keyword in first_cell.lower() for keyword in ['subtotal', 'total', 'vat amount']):
+                        break
+    
+    # Create items DataFrame if we found items
     if items_data:
         items_df = pd.DataFrame(items_data)
         
+        # Ensure all required columns exist
         required_columns = ['No.', 'Description', 'Qty', 'UoM', 
                            'Unit Price Excl. VAT', 'VAT %', 'Line Amount Excl. VAT']
         
@@ -467,16 +297,23 @@ def extract_invoice_data_from_sheet(df, file_name, sheet_name, progress_bar=None
             if col not in items_df.columns:
                 items_df[col] = ''
         
-        items_df = clean_and_convert_item_data(items_df)
+        # Clean numeric columns
+        for col in ['Qty', 'Unit Price Excl. VAT', 'VAT %', 'Line Amount Excl. VAT']:
+            if col in items_df.columns:
+                items_df[col] = pd.to_numeric(items_df[col], errors='coerce')
+        
+        # Clean UoM
+        if 'UoM' in items_df.columns:
+            items_df['UoM'] = items_df['UoM'].apply(
+                lambda x: str(x).strip().title() if pd.notna(x) and str(x).strip() else 'Kilograms'
+            )
+        
         result['items_df'] = items_df
         
-        if result['subtotal'] == 0 and 'Line Amount Excl. VAT' in items_df.columns:
+        # Calculate totals
+        if 'Line Amount Excl. VAT' in items_df.columns:
             result['subtotal'] = items_df['Line Amount Excl. VAT'].sum(skipna=True)
-        
-        if result['vat_amount'] == 0 and 'Line Amount Excl. VAT' in items_df.columns:
-            result['vat_amount'] = items_df['Line Amount Excl. VAT'].sum(skipna=True) * 0.16
-        
-        if result['total_amount'] == 0:
+            result['vat_amount'] = result['subtotal'] * 0.16
             result['total_amount'] = result['subtotal'] + result['vat_amount']
     
     return result
@@ -507,16 +344,17 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### ⚙️ Settings")
     
-    # Settings
-    processing_mode = st.selectbox(
+    # Processing settings
+    processing_mode = st.radio(
         "Processing Mode",
-        ["All Sheets", "First N Sheets", "Last N Sheets", "Custom Range"]
+        ["All Sheets", "First N Sheets", "Last N Sheets", "Custom Range"],
+        index=0
     )
     
     if processing_mode == "First N Sheets":
-        n_sheets = st.number_input("Number of sheets", min_value=1, value=10, step=1)
+        n_sheets = st.slider("Number of sheets", min_value=1, max_value=100, value=10, step=1)
     elif processing_mode == "Last N Sheets":
-        n_sheets = st.number_input("Number of sheets", min_value=1, value=10, step=1)
+        n_sheets = st.slider("Number of sheets", min_value=1, max_value=100, value=10, step=1)
     elif processing_mode == "Custom Range":
         col1, col2 = st.columns(2)
         with col1:
@@ -524,8 +362,13 @@ with st.sidebar:
         with col2:
             end_sheet = st.number_input("End sheet", min_value=1, value=10, step=1)
     
-    verbose_mode = st.checkbox("Show detailed extraction logs", value=False)
-    show_progress = st.checkbox("Show progress bar", value=True)
+    # Performance settings
+    st.markdown("### ⚡ Performance")
+    batch_size = st.slider("Sheets per batch", min_value=1, max_value=50, value=10, 
+                          help="Process sheets in batches to avoid memory issues")
+    show_progress = st.checkbox("Show progress", value=True)
+    enable_optimization = st.checkbox("Enable fast mode", value=True, 
+                                     help="Faster processing with reduced detail")
     
     st.markdown("---")
     st.markdown("### 📊 Features")
@@ -539,8 +382,8 @@ with st.sidebar:
     """)
 
 # Main content
-st.markdown('<h1 class="main-header">📄 Deli's Invoice Data Extraction Tool</h1>', unsafe_allow_html=True)
-st.markdown("Extract Deli's invoice data from Excel files with ease")
+st.markdown('<h1 class="main-header">📄 Invoice Data Extraction Tool</h1>', unsafe_allow_html=True)
+st.markdown("Extract invoice data from Excel files with ease")
 
 # File upload section
 st.markdown("### 📤 Upload Your Excel File")
@@ -558,21 +401,24 @@ if uploaded_file:
         wb = load_workbook(io.BytesIO(uploaded_file.getvalue()), read_only=True, data_only=True)
         sheet_names = wb.sheetnames
         total_sheets = len(sheet_names)
+        wb.close()
         
         st.markdown(f'<div class="info-box"><strong>Found:</strong> {total_sheets} sheets in the file</div>', unsafe_allow_html=True)
         
         # Determine which sheets to process
         if processing_mode == "All Sheets":
             selected_sheets = sheet_names
-            st.session_state.selected_sheets_count = total_sheets
+            st.session_state.selected_sheets_count = min(total_sheets, 100)  # Limit for safety
         elif processing_mode == "First N Sheets":
-            selected_sheets = sheet_names[:n_sheets]
-            st.session_state.selected_sheets_count = n_sheets
+            selected_sheets = sheet_names[:min(n_sheets, total_sheets)]
+            st.session_state.selected_sheets_count = len(selected_sheets)
         elif processing_mode == "Last N Sheets":
-            selected_sheets = sheet_names[-n_sheets:]
-            st.session_state.selected_sheets_count = n_sheets
+            selected_sheets = sheet_names[-min(n_sheets, total_sheets):]
+            st.session_state.selected_sheets_count = len(selected_sheets)
         elif processing_mode == "Custom Range":
-            selected_sheets = sheet_names[start_sheet-1:end_sheet]
+            start_idx = max(0, start_sheet - 1)
+            end_idx = min(total_sheets, end_sheet)
+            selected_sheets = sheet_names[start_idx:end_idx]
             st.session_state.selected_sheets_count = len(selected_sheets)
         
         # Show processing info
@@ -582,69 +428,109 @@ if uploaded_file:
         with col2:
             st.metric("Sheets to Process", st.session_state.selected_sheets_count)
         with col3:
-            st.metric("File Size", f"{len(uploaded_file.getvalue()) / 1024:.1f} KB")
+            file_size_mb = len(uploaded_file.getvalue()) / (1024 * 1024)
+            st.metric("File Size", f"{file_size_mb:.2f} MB")
+        
+        # Show first few sheet names
+        if len(selected_sheets) <= 10:
+            st.markdown("**Sheets to be processed:**")
+            for sheet in selected_sheets:
+                st.markdown(f'<div class="sheet-info">{sheet}</div>', unsafe_allow_html=True)
+        else:
+            st.markdown(f"**Sheets to be processed:** First 10 of {len(selected_sheets)}")
+            for sheet in selected_sheets[:10]:
+                st.markdown(f'<div class="sheet-info">{sheet}</div>', unsafe_allow_html=True)
+            st.markdown(f"*... and {len(selected_sheets) - 10} more sheets*")
         
         # Process button
         if st.button("🚀 Start Extraction", type="primary", use_container_width=True):
             all_results = []
             progress_bar = None
             status_text = None
+            results_container = st.container()
             
             if show_progress:
                 progress_bar = st.progress(0)
                 status_text = st.empty()
             
-            # Create a container for logs
-            log_container = st.container()
-            
-            with log_container:
-                st.markdown("### 📝 Extraction Logs")
-                logs_placeholder = st.empty()
+            with results_container:
+                st.markdown("### 📝 Processing Started")
                 
-                logs = []
                 start_time = time.time()
+                processed_count = 0
+                successful_sheets = 0
                 
-                for i, sheet_name in enumerate(selected_sheets):
-                    if show_progress:
-                        progress = (i + 1) / len(selected_sheets)
-                        progress_bar.progress(progress)
-                        status_text.text(f"Processing sheet {i+1} of {len(selected_sheets)}: {sheet_name}")
+                # Process in batches to manage memory
+                for batch_start in range(0, len(selected_sheets), batch_size):
+                    batch_end = min(batch_start + batch_size, len(selected_sheets))
+                    batch_sheets = selected_sheets[batch_start:batch_end]
                     
-                    # Update logs
-                    if verbose_mode:
-                        logs.append(f"📋 **Processing Sheet {i+1}: {sheet_name}**")
-                        logs_placeholder.markdown("\n".join(logs[-5:]))  # Show last 5 logs
-                    
-                    try:
-                        df = read_excel_with_merged_cells(uploaded_file.getvalue(), sheet_name)
+                    for i, sheet_name in enumerate(batch_sheets):
+                        sheet_num = batch_start + i + 1
                         
-                        if not df.empty:
-                            sheet_data = extract_invoice_data_from_sheet(df, uploaded_file.name, sheet_name)
+                        if show_progress:
+                            progress = sheet_num / len(selected_sheets)
+                            progress_bar.progress(progress)
+                            status_text.text(f"Processing sheet {sheet_num} of {len(selected_sheets)}: {sheet_name[:30]}...")
+                        
+                        try:
+                            # Read sheet
+                            df = read_excel_sheet_fast(uploaded_file.getvalue(), sheet_name)
+                            
+                            if df.empty:
+                                continue
+                            
+                            # Extract data
+                            if enable_optimization:
+                                sheet_data = extract_invoice_data_fast(df, uploaded_file.name, sheet_name)
+                            else:
+                                # Use original extraction function if fast mode is disabled
+                                sheet_data = extract_invoice_data_fast(df, uploaded_file.name, sheet_name)
                             
                             if sheet_data['items_df'] is not None and not sheet_data['items_df'].empty:
                                 all_results.append(sheet_data)
-                                
-                                if verbose_mode:
-                                    logs.append(f"   ✅ Extracted {len(sheet_data['items_df'])} items")
-                                    logs.append(f"   👤 Customer: {sheet_data['customer_name']}")
-                                    logs_placeholder.markdown("\n".join(logs[-5:]))
-                        
-                    except Exception as e:
-                        if verbose_mode:
-                            logs.append(f"   ⚠️ Error: {str(e)[:50]}")
-                            logs_placeholder.markdown("\n".join(logs[-5:]))
-                        continue
-                    
-                    # Small delay for UI update
-                    time.sleep(0.01)
+                                successful_sheets += 1
+                            
+                            processed_count += 1
+                            
+                            # Clear memory
+                            del df
+                            gc.collect()
+                            
+                            # Small delay for UI update
+                            time.sleep(0.01)
+                            
+                        except Exception as e:
+                            st.warning(f"Sheet '{sheet_name}' skipped: {str(e)[:100]}")
+                            continue
                 
                 end_time = time.time()
                 processing_time = end_time - start_time
                 
+                # Clear progress indicators
+                if show_progress:
+                    progress_bar.empty()
+                    status_text.empty()
+                
                 # Combine all results
                 if all_results:
-                    combined_list = []
+                    st.markdown(f'<div class="success-box">✅ Extraction Complete! Processed {successful_sheets} sheets in {processing_time:.1f} seconds</div>', unsafe_allow_html=True)
                     
+                    # Show summary
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("Sheets Processed", successful_sheets)
+                    with col2:
+                        total_items = sum(len(r['items_df']) for r in all_results)
+                        st.metric("Total Items", total_items)
+                    with col3:
+                        customers = len(set(r['customer_name'] for r in all_results if r['customer_name']))
+                        st.metric("Unique Customers", customers)
+                    with col4:
+                        st.metric("Processing Time", f"{processing_time:.1f}s")
+                    
+                    # Combine data
+                    combined_list = []
                     for result in all_results:
                         items_df = result['items_df'].copy()
                         
@@ -679,35 +565,34 @@ if uploaded_file:
                     st.session_state.extracted_data = combined_df
                     st.session_state.processing_complete = True
                     
-                    # Show success message
-                    st.markdown(f'<div class="success-box">✅ Extraction Complete! Processed {len(all_results)} sheets in {processing_time:.1f} seconds</div>', unsafe_allow_html=True)
-                    
-                    # Display summary metrics
-                    st.markdown("### 📊 Extraction Summary")
-                    
-                    col1, col2, col3, col4 = st.columns(4)
-                    with col1:
-                        st.metric("Sheets Processed", len(all_results))
-                    with col2:
-                        st.metric("Total Items", len(combined_df))
-                    with col3:
-                        st.metric("Unique Customers", combined_df['Customer Name'].nunique())
-                    with col4:
-                        st.metric("Processing Time", f"{processing_time:.1f}s")
-                    
                     # Display sample data
-                    st.markdown("### 📋 Sample Data")
+                    st.markdown("### 📋 Sample Data (First 10 rows)")
+                    st.dataframe(combined_df.head(10), width='stretch')
                     
-                    # Create tabs for different views
-                    tab1, tab2, tab3 = st.tabs(["Sample Data", "Data Statistics", "Export Options"])
+                    # Export options
+                    st.markdown("### 📥 Export Options")
                     
-                    with tab1:
-                        st.dataframe(combined_df.head(10), use_container_width=True)
+                    # Generate filename with timestamp
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    filename = f"extracted_invoices_{timestamp}.xlsx"
                     
-                    with tab2:
-                        st.markdown("#### Data Overview")
+                    # Download buttons
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.markdown("#### Excel Format")
+                        st.markdown(get_excel_download_link(combined_df, filename), unsafe_allow_html=True)
+                    
+                    with col2:
+                        st.markdown("#### CSV Format")
+                        csv = combined_df.to_csv(index=False)
+                        b64_csv = base64.b64encode(csv.encode()).decode()
+                        csv_filename = f"extracted_invoices_{timestamp}.csv"
+                        href_csv = f'<a href="data:file/csv;base64,{b64_csv}" download="{csv_filename}">📥 Download CSV File</a>'
+                        st.markdown(href_csv, unsafe_allow_html=True)
+                    
+                    # Data preview
+                    with st.expander("📊 Data Statistics"):
                         col1, col2 = st.columns(2)
-                        
                         with col1:
                             st.markdown("##### Column Information")
                             col_info = pd.DataFrame({
@@ -715,53 +600,30 @@ if uploaded_file:
                                 'Non-Null Count': combined_df.notna().sum().values,
                                 'Data Type': combined_df.dtypes.astype(str).values
                             })
-                            st.dataframe(col_info, use_container_width=True)
+                            st.dataframe(col_info, width='stretch')
                         
                         with col2:
-                            st.markdown("##### Numerical Summary")
-                            if combined_df.select_dtypes(include=[np.number]).shape[1] > 0:
-                                st.dataframe(combined_df.describe(), use_container_width=True)
-                            else:
-                                st.info("No numerical columns found for summary statistics.")
-                    
-                    with tab3:
-                        st.markdown("#### Export Options")
-                        
-                        # Generate filename with timestamp
-                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        filename = f"extracted_invoices_{timestamp}.xlsx"
-                        
-                        # Download button
-                        st.markdown("### 📥 Download Extracted Data")
-                        st.markdown(get_excel_download_link(combined_df, filename), unsafe_allow_html=True)
-                        
-                        # Also show CSV option
-                        csv = combined_df.to_csv(index=False)
-                        b64_csv = base64.b64encode(csv.encode()).decode()
-                        csv_filename = f"extracted_invoices_{timestamp}.csv"
-                        href_csv = f'<a href="data:file/csv;base64,{b64_csv}" download="{csv_filename}">📥 Download CSV File</a>'
-                        st.markdown(href_csv, unsafe_allow_html=True)
-                        
-                        # Preview of data structure
-                        st.markdown("#### Data Structure Preview")
-                        st.json({
-                            "total_records": len(combined_df),
-                            "columns": list(combined_df.columns),
-                            "sample_record": combined_df.iloc[0].to_dict() if len(combined_df) > 0 else {}
-                        })
+                            st.markdown("##### File Summary")
+                            summary_data = {
+                                'Metric': ['Total Sheets', 'Total Items', 'Unique Customers', 'File Size'],
+                                'Value': [
+                                    successful_sheets,
+                                    len(combined_df),
+                                    combined_df['Customer Name'].nunique(),
+                                    f"{sys.getsizeof(combined_df) / 1024 / 1024:.2f} MB"
+                                ]
+                            }
+                            st.dataframe(pd.DataFrame(summary_data), width='stretch')
                 
                 else:
                     st.markdown('<div class="warning-box">⚠️ No data was extracted from any sheets. Please check your file format.</div>', unsafe_allow_html=True)
-                
-                if show_progress:
-                    progress_bar.empty()
-                    status_text.empty()
     
     except Exception as e:
-        st.error(f"Error reading file: {str(e)}")
+        st.error(f"Error processing file: {str(e)}")
+        st.markdown('<div class="error-box">Please try again with a smaller file or fewer sheets.</div>', unsafe_allow_html=True)
 
 else:
-    # Show welcome message when no file is uploaded
+    # Show welcome message
     st.markdown("""
     <div class="info-box">
     <h3>Welcome to the Invoice Data Extractor!</h3>
@@ -775,27 +637,6 @@ else:
     <p>To get started, upload your Excel file using the uploader above.</p>
     </div>
     """, unsafe_allow_html=True)
-    
-    # Show example of extracted data format
-    st.markdown("### 📋 Expected Output Format")
-    
-    example_data = pd.DataFrame({
-        'File Name': ['example.xlsx', 'example.xlsx'],
-        'Sheet Name': ['Sheet1', 'Sheet1'],
-        'Customer Name': ['Chandarana Delis-Lavington Branch', 'Chandarana Delis-Lavington Branch'],
-        'Document Date': ['4. December 2024', '4. December 2024'],
-        'Invoice Number': ['1238685', '1238685'],
-        'Order Number': ['287836', '287836'],
-        'No.': ['BCH-10212', 'BRC-18502'],
-        'Description': ["Brown's Buttery Brie per kg", 'Pecorino per kg'],
-        'Qty': [0.32, 0.26],
-        'UoM': ['Kilograms', 'Kilograms'],
-        'Unit Price Excl. VAT': [2459.98, 3136.00],
-        'VAT %': [16.0, 16.0],
-        'Line Amount Excl. VAT': [787.19, 815.36]
-    })
-    
-    st.dataframe(example_data, use_container_width=True)
 
 # Footer
 st.markdown("---")
