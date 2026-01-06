@@ -539,8 +539,8 @@ with st.sidebar:
     """)
 
 # Main content
-st.markdown('<h1 class="main-header">📄 Invoice Data Extraction Tool</h1>', unsafe_allow_html=True)
-st.markdown("Extract invoice data from Excel files with ease")
+st.markdown('<h1 class="main-header">📄 Deli's Invoice Data Extraction Tool</h1>', unsafe_allow_html=True)
+st.markdown("Extract Deli's invoice data from Excel files with ease")
 
 # File upload section
 st.markdown("### 📤 Upload Your Excel File")
